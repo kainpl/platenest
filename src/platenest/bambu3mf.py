@@ -81,6 +81,18 @@ def _attr(text: str) -> str:
     return '"' + escape(text, {'"': "&quot;"}) + '"'
 
 
+def _clean(text: str) -> str:
+    """A name XML 1.0 can carry: tab and line breaks become spaces, other control characters go."""
+    kept = []
+    for ch in str(text):
+        code = ord(ch)
+        if code in (9, 10, 13):
+            kept.append(" ")
+        elif code >= 32 and not 0xD800 <= code <= 0xDFFF and code not in (0xFFFE, 0xFFFF):
+            kept.append(ch)
+    return "".join(kept)
+
+
 def _part_path(index: int) -> str:
     return f"{_PART_PREFIX}{index}.model"
 
@@ -102,11 +114,16 @@ def _mesh_model(mesh: MeshObject, index: int) -> str:
 
 
 def _check_extra(extra_files: Mapping[str, bytes]) -> None:
+    owned = {name.lower() for name in _FIXED}
+    unwanted = (chr(92), ":")  # a backslash or a drive letter means another path on Windows
     for name in extra_files:
         parts = name.split("/")
-        if not name or name.startswith("/") or "\\" in name or any(p in ("", ".", "..") for p in parts):
+        if not name or name.startswith("/") or any(p in ("", ".", "..") for p in parts):
             raise ValueError(f"extra file name {name!r} must be a relative path without '..'")
-        if name in _FIXED or name.startswith(_PART_PREFIX):
+        if any(ord(ch) < 32 or ch in unwanted for ch in name):
+            raise ValueError(f"extra file name {name!r} holds a backslash, a colon or a control character")
+        # a ZIP reader on a case-insensitive file system would let it shadow one of ours
+        if name.lower() in owned or name.lower().startswith(_PART_PREFIX.lower()):
             raise ValueError(f"extra file name {name!r} collides with a member the writer owns")
 
 
@@ -123,6 +140,11 @@ def write_project(
     """Serialise a project. Plates are numbered from 0; the highest plate index used decides how many exist."""
     extra_files = dict(extra_files or {})
     _check_extra(extra_files)
+    # plain numbers and XML-safe names from here on: numpy scalars are welcome as arguments
+    objects = [MeshObject(_clean(mesh.name), mesh.vertices, mesh.triangles) for mesh in objects]
+    instances = [Instance(int(i.object), int(i.plate), float(i.x), float(i.y), float(i.angle)) for i in instances]
+    bed_size = (float(bed_size[0]), float(bed_size[1]))
+    title, application = _clean(title), _clean(application)
     for number, instance in enumerate(instances):
         if not 0 <= instance.object < len(objects):
             raise ValueError(f"instance {number}: object index {instance.object} is out of range")

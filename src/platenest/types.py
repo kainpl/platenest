@@ -9,6 +9,7 @@ Z is never changed.
 from __future__ import annotations
 
 import math
+import numbers
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Literal
@@ -75,6 +76,10 @@ def _finite_positive(value: float) -> bool:
     return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
 
 
+def _whole(value: object, minimum: int) -> bool:
+    return isinstance(value, numbers.Integral) and not isinstance(value, bool) and value >= minimum
+
+
 def _check_polygons(polygons: Sequence[Polygon], what: str) -> None:
     for polygon in polygons:
         points = np.asarray(polygon, dtype=np.float64)
@@ -103,7 +108,7 @@ def validate(parts: Sequence[Part], zone: Zone, options: Options) -> None:
         )
     if len(options.rotations) == 0 or not all(math.isfinite(a) for a in options.rotations):
         raise ValueError("options: rotations must hold at least one finite angle")
-    if not isinstance(options.fill_limit, int) or options.fill_limit < 1:
+    if not _whole(options.fill_limit, 1):
         raise ValueError("options: fill_limit must be an integer >= 1")
 
     for index, part in enumerate(parts):
@@ -118,5 +123,5 @@ def validate(parts: Sequence[Part], zone: Zone, options: Options) -> None:
             raise ValueError(f"part {index}: triangle indices must be integers")
         if triangles.min() < 0 or triangles.max() >= len(vertices):
             raise ValueError(f"part {index}: a triangle index is outside the vertex array")
-        if not part.fill and (not isinstance(part.quantity, int) or part.quantity < 1):
+        if not part.fill and not _whole(part.quantity, 1):
             raise ValueError(f"part {index}: quantity must be an integer >= 1")
