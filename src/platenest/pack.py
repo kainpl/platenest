@@ -131,6 +131,39 @@ def _fill(
     return plate, [_Item(part, -1, shape, col, row) for shape, col, row in placed], limited
 
 
+def _shifted_ok(items: list[_Item], allowed: np.ndarray, dx: int, dy: int) -> bool:
+    height, width = allowed.shape
+    for item in items:
+        h, w = item.shape.raw.shape
+        col, row = item.col + dx, item.row + dy
+        if col < 0 or row < 0 or col + w > width or row + h > height:
+            return False
+        if (item.shape.raw & ~allowed[row : row + h, col : col + w]).any():
+            return False
+    return True
+
+
+def _centre(items: list[_Item], allowed: np.ndarray) -> list[_Item]:
+    """Move one plate's group towards the centre of the allowed area, as far as it stays allowed.
+
+    Every copy moves by the same whole-pixel vector, so the gaps between them do not change.
+    """
+    if not items or not allowed.any():
+        return items
+    rows, cols = np.nonzero(allowed.any(axis=1))[0], np.nonzero(allowed.any(axis=0))[0]
+    zone_cols, zone_rows = cols[0] + cols[-1] + 1, rows[0] + rows[-1] + 1  # twice the centre
+    c0 = min(i.col for i in items)
+    c1 = max(i.col + i.shape.raw.shape[1] for i in items)
+    r0 = min(i.row for i in items)
+    r1 = max(i.row + i.shape.raw.shape[0] for i in items)
+    want_x, want_y = (zone_cols - (c0 + c1)) // 2, (zone_rows - (r0 + r1)) // 2
+    for k in range(16, 0, -1):
+        dx, dy = round(want_x * k / 16), round(want_y * k / 16)
+        if (dx or dy) and _shifted_ok(items, allowed, dx, dy):
+            return [_Item(i.part, i.plate, i.shape, i.col + dx, i.row + dy) for i in items]
+    return items
+
+
 def pack(
     parts: Sequence[Part],
     zone: Zone,
@@ -198,6 +231,11 @@ def pack(
         fill_counts[index] = len(filled)
         if limited:
             fill_limited.add(index)
+    if options.centre:
+        items = [
+            moved for plate in range(len(plates)) for moved in _centre([i for i in items if i.plate == plate], allowed)
+        ]
+
     resolution = options.resolution
     placements = tuple(
         Placement(
