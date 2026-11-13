@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-13
+
+- **Fixed:** `from platenest import pack` returned a module instead of the function whenever `Cancelled` or
+  `Progress` had been imported first — the function shared its name with the submodule that defined it. The
+  submodule is now `platenest.packing`; import `pack`, `Cancelled` and `Progress` from `platenest` itself.
+
 ## [0.1.0] - 2026-11-13
 
 The first release.

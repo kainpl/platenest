@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "platenest"
-version = "0.1.0"
+version = "0.1.1"
 description = "Dense nesting of 3D-print parts onto plates, and a Bambu project 3MF writer"
 readme = "README.md"
 license = "AGPL-3.0-or-later"
