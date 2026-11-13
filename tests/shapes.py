@@ -86,3 +86,66 @@ def ring(outer_d: float, inner_d: float, h: float, segments: int = 64) -> tuple[
 def sliver(h: float) -> tuple[np.ndarray, np.ndarray]:
     """A vertical triangle: its top-down footprint has zero area."""
     return np.array([[0.0, 0.0, 0.0], [0.0, 0.0, h], [0.0, 0.0, h / 2]]), np.array([[0, 1, 2]], dtype=np.int64)
+
+
+# --- measuring helpers (exact, via shapely; test-only) ---------------------------------------
+
+
+def transformed(vertices: np.ndarray, placement) -> np.ndarray:
+    """Apply the placement contract: ``p' = Rz(angle) · p + (x, y, 0)``."""
+    a = math.radians(placement.angle)
+    c, s = math.cos(a), math.sin(a)
+    out = np.array(vertices, dtype=np.float64, copy=True)
+    x, y = vertices[:, 0], vertices[:, 1]
+    out[:, 0] = c * x - s * y + placement.x
+    out[:, 1] = s * x + c * y + placement.y
+    return out
+
+
+def _outline(vertices: np.ndarray, triangles: np.ndarray):
+    """The top-down footprint as an exact polygon."""
+    from shapely import Polygon, union_all
+
+    xy = vertices[:, :2][triangles]
+    polygons = [Polygon(t) for t in xy]
+    return union_all([p for p in polygons if p.area > 0])
+
+
+def placed_outlines(result, parts) -> dict[int, list]:
+    """Plate index -> footprints of every copy on it, in plate coordinates."""
+    from shapely import affinity
+
+    base = {}
+    plates: dict[int, list] = {}
+    for p in result.placements:
+        if p.part not in base:
+            base[p.part] = _outline(np.asarray(parts[p.part].vertices), np.asarray(parts[p.part].triangles))
+        shape = affinity.translate(affinity.rotate(base[p.part], p.angle, origin=(0, 0)), p.x, p.y)
+        plates.setdefault(p.plate, []).append(shape)
+    return plates
+
+
+def min_gap(result, parts) -> float:
+    """Smallest distance between two different copies on one plate; ``inf`` when no plate holds two."""
+    best = math.inf
+    for shapes in placed_outlines(result, parts).values():
+        for i, a in enumerate(shapes):
+            for b in shapes[i + 1 :]:
+                best = min(best, a.distance(b))
+    return best
+
+
+def overlap_area(result, parts) -> float:
+    total = 0.0
+    for shapes in placed_outlines(result, parts).values():
+        for i, a in enumerate(shapes):
+            for b in shapes[i + 1 :]:
+                total += a.intersection(b).area
+    return round(total, 6)
+
+
+def transformed_bounds(result, parts, index: int = 0) -> tuple[float, float, float, float]:
+    """``(x0, y0, x1, y1)`` of placement ``index``."""
+    p = result.placements[index]
+    v = transformed(np.asarray(parts[p.part].vertices), p)
+    return float(v[:, 0].min()), float(v[:, 1].min()), float(v[:, 0].max()), float(v[:, 1].max())

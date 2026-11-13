@@ -21,7 +21,10 @@ GRAVITIES: tuple[Gravity, ...] = ("y", "x", "xy")
 
 
 class Plate:
-    def __init__(self, allowed: np.ndarray) -> None:
+    def __init__(self, allowed: np.ndarray, blocked_cache: dict[int, np.ndarray] | None = None) -> None:
+        # blocked_cache: shape id -> "raw mask clear of blocked pixels" map. It depends only on the
+        # allowed mask, so every plate of one pack() call can share it.
+        self._cache = blocked_cache if blocked_cache is not None else {}
         self._height, self._width = allowed.shape
         self._blocked = ~allowed
         self._blocked_f = self._blocked.astype(np.float32)
@@ -45,9 +48,12 @@ class Plate:
         height, width = shape.raw.shape
         if height > self._height or width > self._width:
             return None
-        clear_of_blocked = cv2.matchTemplate(self._blocked_f, shape.raw.astype(np.float32), cv2.TM_CCORR) < 0.5
+        clear_of_blocked = self._cache.get(id(shape))
+        if clear_of_blocked is None:
+            clear_of_blocked = cv2.matchTemplate(self._blocked_f, shape.raw.astype(np.float32), cv2.TM_CCORR) < 0.5
+            self._cache[id(shape)] = clear_of_blocked
         if self.empty:
-            return clear_of_blocked
+            return clear_of_blocked.copy()
         occupied = np.pad(self._occupied, shape.grow).astype(np.float32)
         clear_of_parts = cv2.matchTemplate(occupied, shape.grown.astype(np.float32), cv2.TM_CCORR) < 0.5
         return clear_of_blocked & clear_of_parts

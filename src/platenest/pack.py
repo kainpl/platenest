@@ -1,0 +1,173 @@
+"""``pack()``: put parts on as few plates as possible.
+
+A run is one (order, gravity) pair: parts sorted by an order are placed one copy at a time, each
+on the first plate that has a free position, at the position — over all its rotations — with the
+smallest gravity score. Several runs are tried and the best one is kept.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+
+import numpy as np
+
+from platenest.plate import GRAVITIES, Gravity, Plate
+from platenest.raster import Shape, footprints
+from platenest.types import Options, PackResult, Part, Placement, Rejected, Zone, validate
+from platenest.zone import allowed_mask
+
+_ORDERS = ("area", "longest")
+_HEIGHT_EPS = 1e-6
+
+
+class Cancelled(Exception):
+    """Raised by :func:`pack` when the ``cancel`` callback returns True."""
+
+
+@dataclass(frozen=True)
+class Progress:
+    run: int  # 1-based
+    runs: int
+    placed: int  # copies placed in this run so far
+    total: int  # copies this run will place
+    plate: int  # 0-based plate the last copy went to
+
+
+@dataclass(frozen=True, eq=False)
+class _Item:
+    part: int
+    plate: int
+    shape: Shape
+    col: int
+    row: int
+
+
+def _reject(parts: Sequence[Part], shapes: list[tuple[Shape, ...]], zone: Zone, empty: Plate) -> dict[int, str]:
+    rejected: dict[int, str] = {}
+    for index, part in enumerate(parts):
+        z = np.asarray(part.vertices, dtype=np.float64)[:, 2]
+        if not shapes[index]:
+            rejected[index] = "empty_mesh"
+        elif zone.max_height is not None and float(z.max() - z.min()) > zone.max_height + _HEIGHT_EPS:
+            rejected[index] = "too_tall"
+        elif all(empty.best(shape, "y") is None for shape in shapes[index]):
+            rejected[index] = "too_large"
+    return rejected
+
+
+def _place(plate: Plate, shapes: tuple[Shape, ...], gravity: Gravity) -> tuple[Shape, int, int] | None:
+    """The best position on one plate over all rotations (earlier rotation wins a tie)."""
+    best: tuple[int, Shape, int, int] | None = None
+    for shape in shapes:
+        position = plate.best(shape, gravity)
+        if position is None:
+            continue
+        score = plate.score(*position, gravity)
+        if best is None or score < best[0]:
+            best = (score, shape, *position)
+    return None if best is None else best[1:]
+
+
+def _order(copies: list[tuple[int, int]], shapes: list[tuple[Shape, ...]], order: str) -> list[tuple[int, int]]:
+    def size(part: int) -> int:
+        raw = shapes[part][0].raw
+        return int(raw.sum()) if order == "area" else max(raw.shape)
+
+    return sorted(copies, key=lambda c: (-size(c[0]), c[0], c[1]))
+
+
+def _run(
+    copies: list[tuple[int, int]],
+    shapes: list[tuple[Shape, ...]],
+    gravity: Gravity,
+    new_plate: Callable[[], Plate],
+    step: Callable[[int, int], None],
+) -> tuple[list[Plate], list[_Item]]:
+    plates: list[Plate] = []
+    items: list[_Item] = []
+    full: dict[int, int] = {}  # part -> first plate still worth trying (plates only ever get fuller)
+    for placed, (part, _copy) in enumerate(copies):
+        step(placed, len(plates) - 1)
+        index = full.get(part, 0)
+        while True:
+            if index == len(plates):
+                plates.append(new_plate())
+            found = _place(plates[index], shapes[part], gravity)
+            if found is not None:
+                break
+            index += 1
+            full[part] = index
+        shape, col, row = found
+        plates[index].put(shape, col, row)
+        items.append(_Item(part, index, shape, col, row))
+    return plates, items
+
+
+def pack(
+    parts: Sequence[Part],
+    zone: Zone,
+    options: Options = Options(),
+    *,
+    progress: Callable[[Progress], None] | None = None,
+    cancel: Callable[[], bool] | None = None,
+) -> PackResult:
+    """Pack ``parts`` into ``zone``. See :mod:`platenest.types` for the placement contract.
+
+    Parts that cannot be placed at all come back in ``rejected``; the rest are still packed.
+    Raises ``ValueError`` for malformed input and :class:`Cancelled` when ``cancel()`` returns True.
+    """
+    validate(parts, zone, options)
+    allowed = allowed_mask(zone, options)
+    cache: dict[int, np.ndarray] = {}
+
+    def new_plate() -> Plate:
+        return Plate(allowed, cache)
+
+    shapes = [footprints(part, options) for part in parts]
+    rejected = _reject(parts, shapes, zone, new_plate())
+
+    copies = [
+        (index, copy)
+        for index, part in enumerate(parts)
+        if index not in rejected and not part.fill
+        for copy in range(part.quantity)
+    ]
+
+    runs = [(order, gravity) for order in _ORDERS for gravity in GRAVITIES]
+    best: tuple[tuple[int, int, int], list[Plate], list[_Item]] | None = None
+    for number, (order, gravity) in enumerate(runs, start=1):
+        if not copies:
+            break
+
+        def step(placed: int, plate: int, number: int = number) -> None:
+            if cancel is not None and cancel():
+                raise Cancelled
+            if progress is not None and placed:
+                progress(Progress(number, len(runs), placed, len(copies), plate))
+
+        plates, items = _run(_order(copies, shapes, order), shapes, gravity, new_plate, step)
+        if progress is not None:
+            progress(Progress(number, len(runs), len(copies), len(copies), len(plates) - 1))
+        c0, r0, c1, r1 = plates[-1].bounds()
+        key = (len(plates), (c1 - c0) * (r1 - r0), number)
+        if best is None or key < best[0]:
+            best = (key, plates, items)
+
+    plates, items = (best[1], best[2]) if best is not None else ([], [])
+    resolution = options.resolution
+    placements = tuple(
+        Placement(
+            part=item.part,
+            plate=item.plate,
+            x=item.col * resolution + item.shape.origin[0],
+            y=item.row * resolution + item.shape.origin[1],
+            angle=item.shape.angle,
+        )
+        for item in sorted(items, key=lambda i: (i.plate, i.part, i.row, i.col))
+    )
+    return PackResult(
+        plate_count=len(plates),
+        placements=placements,
+        rejected=tuple(Rejected(index, reason) for index, reason in sorted(rejected.items())),
+    )
