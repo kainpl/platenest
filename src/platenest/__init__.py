@@ -5,6 +5,7 @@ The packer lives here; the Bambu project 3MF writer is the separate, stdlib-only
 """
 
 from platenest.pack import Cancelled, Progress, pack
+from platenest.preview import render_plate
 from platenest.types import Options, PackResult, Part, Placement, Polygon, Rejected, Zone, validate
 
 __all__ = [
@@ -18,5 +19,6 @@ __all__ = [
     "Rejected",
     "Zone",
     "pack",
+    "render_plate",
     "validate",
 ]
