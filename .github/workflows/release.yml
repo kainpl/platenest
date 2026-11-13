@@ -1,0 +1,97 @@
+name: Release
+
+# A pushed `v<version>` tag publishes that version to GitHub and to PyPI:
+#
+#   v0.2.0b1 / v0.2.0rc1  pre-release, from dev (or main), titled "platenest v0.2.0b1 (pre-release)"
+#   v0.2.0                stable, only from a commit on main, titled "platenest v0.2.0", marked latest
+#
+# Before anything is published: the whole CI (lint, tests on two OSes, the built packages), the tag equals
+# `v` + project.version, and CHANGELOG.md has a non-empty `## [<version>]` section, which becomes the release notes.
+# Tags are never moved or deleted: a broken release is followed by the next version, not replaced.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+
+  prepare:
+    needs: checks
+    runs-on: ubuntu-24.04
+    outputs:
+      title: ${{ steps.prep.outputs.title }}
+      prerelease: ${{ steps.prep.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the branch history, to prove a stable tag is on main
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Check the tag and write the notes
+        id: prep
+        run: python tools/release.py prepare --tag "$GITHUB_REF_NAME" --notes notes.md >> "$GITHUB_OUTPUT"
+      - name: A stable release is cut from main
+        if: steps.prep.outputs.prerelease == 'false'
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is a stable version but its commit is not on main"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-notes
+          path: notes.md
+          if-no-files-found: error
+
+  # PyPI first: a version can be uploaded there only once, so if it refuses, no GitHub release claims it exists.
+  # Trusted publishing (OIDC): no API token anywhere. PyPI must know this repository, this workflow file and the
+  # "pypi" environment as the publisher of the project — configured once on pypi.org.
+  publish-pypi:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/platenest/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: platenest-dist
+          path: dist
+      - run: rm -f dist/SHA256SUMS
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: [prepare, publish-pypi]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # create the release and attach its files
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: platenest-dist
+          path: dist
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-notes
+          path: .
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ needs.prepare.outputs.title }}
+          PRERELEASE: ${{ needs.prepare.outputs.prerelease }}
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          if [ "$PRERELEASE" = "true" ]; then kind=(--prerelease --latest=false); else kind=(--latest); fi
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --verify-tag --title "$TITLE" --notes-file notes.md "${kind[@]}"
