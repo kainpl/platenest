@@ -104,6 +104,33 @@ def _run(
     return plates, items
 
 
+def _fill(
+    shapes: tuple[Shape, ...],
+    part: int,
+    limit: int,
+    new_plate: Callable[[], Plate],
+    check_cancel: Callable[[], None],
+) -> tuple[Plate, list[_Item], bool]:
+    """One plate holding as many copies as fit; the gravity that fits the most wins (earliest on a tie)."""
+    best: tuple[Plate, list[tuple[Shape, int, int]], bool] | None = None
+    for gravity in GRAVITIES:
+        plate, placed, limited = new_plate(), [], False
+        while True:
+            check_cancel()
+            found = _place(plate, shapes, gravity)
+            if found is None:
+                break
+            if len(placed) == limit:
+                limited = True
+                break
+            plate.put(*found)
+            placed.append(found)
+        if best is None or len(placed) > len(best[1]):
+            best = (plate, placed, limited)
+    plate, placed, limited = best
+    return plate, [_Item(part, -1, shape, col, row) for shape, col, row in placed], limited
+
+
 def pack(
     parts: Sequence[Part],
     zone: Zone,
@@ -155,6 +182,22 @@ def pack(
             best = (key, plates, items)
 
     plates, items = (best[1], best[2]) if best is not None else ([], [])
+
+    def check_cancel() -> None:
+        if cancel is not None and cancel():
+            raise Cancelled
+
+    fill_counts: dict[int, int] = {}
+    fill_limited: set[int] = set()
+    for index, part in enumerate(parts):
+        if not part.fill or index in rejected:
+            continue
+        plate, filled, limited = _fill(shapes[index], index, options.fill_limit, new_plate, check_cancel)
+        items = items + [_Item(index, len(plates), i.shape, i.col, i.row) for i in filled]
+        plates = plates + [plate]
+        fill_counts[index] = len(filled)
+        if limited:
+            fill_limited.add(index)
     resolution = options.resolution
     placements = tuple(
         Placement(
@@ -170,4 +213,6 @@ def pack(
         plate_count=len(plates),
         placements=placements,
         rejected=tuple(Rejected(index, reason) for index, reason in sorted(rejected.items())),
+        fill_counts=fill_counts,
+        fill_limited=frozenset(fill_limited),
     )
