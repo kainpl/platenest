@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "platenest"
+version = "0.1.0"
+description = "Dense nesting of 3D-print parts onto plates, and a Bambu project 3MF writer"
+readme = "README.md"
+license = "AGPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = ["numpy", "opencv-python-headless"]
+keywords = ["3d-printing", "nesting", "packing", "3mf"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Graphics :: 3D Modeling",
+]
+
+[project.urls]
+Homepage = "https://github.com/kainpl/platenest"
+
+[project.optional-dependencies]
+dev = ["pytest", "ruff", "build", "twine"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/platenest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests"]
+markers = ["acceptance: local acceptance run against a real part set (needs PLATENEST_ACCEPTANCE_3MF)"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["B008"]
+
+[tool.ruff.format]
+quote-style = "double"
