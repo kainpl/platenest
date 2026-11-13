@@ -13,9 +13,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from platenest.plate import GRAVITIES, Gravity, Plate
-from platenest.raster import Shape, footprints
+from platenest.raster import Shape, footprints, has_area
 from platenest.types import Options, PackResult, Part, Placement, Rejected, Zone, validate
-from platenest.zone import allowed_mask
+from platenest.zone import allowed_mask, grid_size
 
 _ORDERS = ("area", "longest")
 _HEIGHT_EPS = 1e-6
@@ -32,6 +32,7 @@ class Progress:
     placed: int  # copies placed in this run so far
     total: int  # copies this run will place
     plate: int  # 0-based plate the last copy went to
+    fill_part: int | None = None  # set while a fill part's own plate is being filled: run = attempt, total = cap
 
 
 @dataclass(frozen=True, eq=False)
@@ -47,11 +48,11 @@ def _reject(parts: Sequence[Part], shapes: list[tuple[Shape, ...]], zone: Zone, 
     rejected: dict[int, str] = {}
     for index, part in enumerate(parts):
         z = np.asarray(part.vertices, dtype=np.float64)[:, 2]
-        if not shapes[index]:
+        if not has_area(part):
             rejected[index] = "empty_mesh"
         elif zone.max_height is not None and float(z.max() - z.min()) > zone.max_height + _HEIGHT_EPS:
             rejected[index] = "too_tall"
-        elif all(empty.best(shape, "y") is None for shape in shapes[index]):
+        elif all(empty.best(shape, "y") is None for shape in shapes[index]):  # also: no rotation small enough
             rejected[index] = "too_large"
     return rejected
 
@@ -110,10 +111,11 @@ def _fill(
     limit: int,
     new_plate: Callable[[], Plate],
     check_cancel: Callable[[], None],
+    report: Callable[[int, int], None],
 ) -> tuple[Plate, list[_Item], bool]:
     """One plate holding as many copies as fit; the gravity that fits the most wins (earliest on a tie)."""
     best: tuple[Plate, list[tuple[Shape, int, int]], bool] | None = None
-    for gravity in GRAVITIES:
+    for attempt, gravity in enumerate(GRAVITIES, start=1):
         plate, placed, limited = new_plate(), [], False
         while True:
             check_cancel()
@@ -125,6 +127,7 @@ def _fill(
                 break
             plate.put(*found)
             placed.append(found)
+            report(attempt, len(placed))
         if best is None or len(placed) > len(best[1]):
             best = (plate, placed, limited)
     plate, placed, limited = best
@@ -184,7 +187,7 @@ def pack(
     def new_plate() -> Plate:
         return Plate(allowed, cache)
 
-    shapes = [footprints(part, options) for part in parts]
+    shapes = [footprints(part, options, grid_size(zone, options.resolution)) for part in parts]
     rejected = _reject(parts, shapes, zone, new_plate())
 
     copies = [
@@ -225,7 +228,12 @@ def pack(
     for index, part in enumerate(parts):
         if not part.fill or index in rejected:
             continue
-        plate, filled, limited = _fill(shapes[index], index, options.fill_limit, new_plate, check_cancel)
+
+        def report(attempt: int, count: int, index: int = index, plate_index: int = len(plates)) -> None:
+            if progress is not None:
+                progress(Progress(attempt, len(GRAVITIES), count, options.fill_limit, plate_index, fill_part=index))
+
+        plate, filled, limited = _fill(shapes[index], index, options.fill_limit, new_plate, check_cancel, report)
         items = items + [_Item(index, len(plates), i.shape, i.col, i.row) for i in filled]
         plates = plates + [plate]
         fill_counts[index] = len(filled)

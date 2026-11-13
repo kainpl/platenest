@@ -73,6 +73,8 @@ Behaviour worth knowing:
 - **Rejections** do not stop the run: a part with no top-down area (`empty_mesh`), taller than
   `Zone.max_height` (`too_tall`) or too big for an empty plate in every rotation (`too_large`) is reported
   in `PackResult.rejected` and the rest is packed.
+- **`spacing=0`** lets parts touch. Axis-aligned edges meet exactly; slanted edges are judged on the pixel
+  grid and may overlap by up to about a tenth of a millimetre. Ask for a small spacing if that matters.
 - **Deterministic.** The same input gives the same placements and a byte-identical 3MF.
 - `progress=` receives a `Progress` after every placed copy; `cancel=` is polled before every copy and
   makes `pack` raise `Cancelled`.
@@ -87,7 +89,8 @@ a desktop CPU.
 `project_settings` is written verbatim as `Metadata/project_settings.config`; a complete settings file is
 your responsibility — the slicer's command line does not fill in missing keys. `extra_files` lets you
 carry your own records inside the archive. `read_project` reads back what `write_project` wrote (it relies
-on a small `Metadata/platenest.json` record) and refuses anything else.
+on a small `Metadata/platenest.json` record) and answers `ValueError` for anything else — a foreign 3MF, a
+damaged archive, or one that unpacks to more than `max_bytes`.
 
 ## Development
 
