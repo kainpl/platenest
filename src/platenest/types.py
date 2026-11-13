@@ -17,6 +17,8 @@ import numpy as np
 
 Polygon = Sequence[tuple[float, float]]
 
+MAX_GRID_CELLS = 50_000_000  # plate pixels; every plate holds a few arrays of this size
+
 
 @dataclass(frozen=True, eq=False)
 class Part:
@@ -93,6 +95,12 @@ def validate(parts: Sequence[Part], zone: Zone, options: Options) -> None:
         raise ValueError("options: spacing must be a finite number >= 0")
     if not _finite_positive(options.resolution):
         raise ValueError("options: resolution must be a positive finite number")
+    cells = math.ceil(zone.width / options.resolution) * math.ceil(zone.depth / options.resolution)
+    if cells > MAX_GRID_CELLS:
+        raise ValueError(
+            f"options: resolution {options.resolution} is too fine for a {zone.width} x {zone.depth} zone "
+            f"({cells} cells, the limit is {MAX_GRID_CELLS})"
+        )
     if len(options.rotations) == 0 or not all(math.isfinite(a) for a in options.rotations):
         raise ValueError("options: rotations must hold at least one finite angle")
     if not isinstance(options.fill_limit, int) or options.fill_limit < 1:

@@ -20,6 +20,7 @@ import json
 import math
 import uuid
 import zipfile
+import zlib
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from xml.etree import ElementTree
@@ -42,6 +43,7 @@ _MODEL_SETTINGS = "Metadata/model_settings.config"
 _PROJECT_SETTINGS = "Metadata/project_settings.config"
 _RECORD = "Metadata/platenest.json"
 _PART_PREFIX = "3D/Objects/part_"
+DEFAULT_MAX_BYTES = 256 * 1024 * 1024  # unpacked size read_project accepts unless told otherwise
 _FIXED = frozenset({_CONTENT_TYPES, _ROOT_RELS, _MODEL, _MODEL_RELS, _MODEL_SETTINGS, _PROJECT_SETTINGS, _RECORD})
 _XML = '<?xml version="1.0" encoding="UTF-8"?>\n'
 
@@ -231,15 +233,20 @@ def write_project(
     return buffer.getvalue()
 
 
+def _number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _index(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _read_mesh(data: bytes) -> tuple[tuple[tuple[float, float, float], ...], tuple[tuple[int, int, int], ...]]:
     # The file may come from anywhere. A mesh model needs no document type declaration, and refusing
     # one closes entity expansion and external entities without a third-party parser.
     if b"<!DOCTYPE" in data or b"<!ENTITY" in data:
-        raise ValueError("not a platenest project: a mesh model carries a document type declaration")
-    try:
-        root = ElementTree.fromstring(data)
-    except ElementTree.ParseError:
-        raise ValueError("not a platenest project: a mesh model is not well-formed XML") from None
+        raise ValueError("a mesh model carries a document type declaration")
+    root = ElementTree.fromstring(data)
     vertices = tuple(
         (float(v.get("x")), float(v.get("y")), float(v.get("z"))) for v in root.iter(f"{{{_CORE_NS}}}vertex")
     )
@@ -249,39 +256,63 @@ def _read_mesh(data: bytes) -> tuple[tuple[tuple[float, float, float], ...], tup
     return vertices, triangles
 
 
-def read_project(data: bytes) -> Project:
-    """Read back a file :func:`write_project` produced. ``ValueError`` for anything else.
+def _read_record(data: bytes) -> tuple[tuple[Instance, ...], tuple[float, float], list[str]]:
+    record = json.loads(data)
+    if not isinstance(record, dict) or record.get("version") != 1:
+        raise ValueError("the record is not version 1")
+    names, bed, entries = record.get("objects"), record.get("bed_size"), record.get("instances")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        raise ValueError("the record's object names are not a list of strings")
+    if not isinstance(bed, list) or len(bed) != 2 or not all(_number(v) and v > 0 for v in bed):
+        raise ValueError("the record's bed size is not two positive numbers")
+    if not isinstance(entries, list):
+        raise ValueError("the record's instances are not a list")
+    instances = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            raise ValueError("an instance is not an object")
+        obj, plate = entry.get("object"), entry.get("plate")
+        if not _index(obj) or obj >= len(names) or not _index(plate):
+            raise ValueError("an instance names an object or a plate that does not exist")
+        x, y, angle = entry.get("x"), entry.get("y"), entry.get("angle")
+        if not (_number(x) and _number(y) and _number(angle)):
+            raise ValueError("an instance position is not numeric")
+        instances.append(Instance(obj, plate, x, y, angle))
+    return tuple(instances), (bed[0], bed[1]), names
+
+
+def read_project(data: bytes, *, max_bytes: int = DEFAULT_MAX_BYTES) -> Project:
+    """Read back a file :func:`write_project` produced.
+
+    Anything else — a foreign 3MF, a damaged or truncated archive, a record that does not add up —
+    is a ``ValueError`` starting with "not a platenest project". The archive's declared unpacked
+    size is checked against ``max_bytes`` before any member is read.
 
     An object no instance uses was never written, so it comes back with its name and no geometry.
     """
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
-    except zipfile.BadZipFile:
-        raise ValueError("not a platenest project: not a ZIP archive") from None
-    with archive:
-        names = set(archive.namelist())
-        if _RECORD not in names:
-            raise ValueError("not a platenest project: Metadata/platenest.json is missing")
-        try:
-            record = json.loads(archive.read(_RECORD))
-            if record["version"] != 1:
-                raise ValueError(f"not a platenest project this version reads: record version {record['version']}")
-            instances = tuple(
-                Instance(i["object"], i["plate"], i["x"], i["y"], i["angle"]) for i in record["instances"]
-            )
-            bed_size = (record["bed_size"][0], record["bed_size"][1])
-            object_names = list(record["objects"])
-        except (KeyError, TypeError, IndexError, json.JSONDecodeError) as error:
-            raise ValueError(f"not a platenest project: unreadable record ({type(error).__name__})") from None
-        objects = []
-        for index, name in enumerate(object_names):
-            path = _part_path(index)
-            vertices, triangles = _read_mesh(archive.read(path)) if path in names else ((), ())
-            objects.append(MeshObject(name, vertices, triangles))
-        extra = {
-            name: archive.read(name)
-            for name in sorted(names)
-            if name not in _FIXED and not name.startswith(_PART_PREFIX) and not name.endswith("/")
-        }
-        settings = archive.read(_PROJECT_SETTINGS) if _PROJECT_SETTINGS in names else b""
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            infos = archive.infolist()
+            names = {info.filename for info in infos}
+            if _RECORD not in names:
+                raise ValueError("Metadata/platenest.json is missing")
+            unpacked = sum(info.file_size for info in infos)
+            if unpacked > max_bytes:
+                raise ValueError(f"too large: unpacks to {unpacked} bytes, the limit is {max_bytes}")
+            instances, bed_size, object_names = _read_record(archive.read(_RECORD))
+            objects = []
+            for index, name in enumerate(object_names):
+                path = _part_path(index)
+                vertices, triangles = _read_mesh(archive.read(path)) if path in names else ((), ())
+                objects.append(MeshObject(name, vertices, triangles))
+            extra = {
+                name: archive.read(name)
+                for name in sorted(names)
+                if name not in _FIXED and not name.startswith(_PART_PREFIX) and not name.endswith("/")
+            }
+            settings = archive.read(_PROJECT_SETTINGS) if _PROJECT_SETTINGS in names else b""
+    except ValueError as error:  # ours, and json.JSONDecodeError / UnicodeDecodeError, which are ValueErrors
+        raise ValueError(f"not a platenest project: {error}") from None
+    except (zipfile.BadZipFile, zlib.error, ElementTree.ParseError, TypeError, RecursionError, EOFError) as error:
+        raise ValueError(f"not a platenest project: damaged archive ({type(error).__name__})") from None
     return Project(tuple(objects), instances, bed_size, settings, extra)
