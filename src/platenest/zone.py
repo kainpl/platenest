@@ -35,6 +35,20 @@ def _fill(mask: np.ndarray, polygon: Polygon, resolution: float, *, touch: bool)
         cv2.polylines(mask, [points], True, 1, thickness=1, shift=_SHIFT)
 
 
+def _whole_pixels_inside(polygons: list[Polygon], width: int, height: int, resolution: float) -> np.ndarray:
+    """Pixels lying entirely inside the union of ``polygons``.
+
+    Decided on the lattice of pixel corners (corner ``(r, c)`` is the point ``(c·res, r·res)``): a pixel
+    counts when all four of its corners are inside or on the boundary. An edge on the pixel grid is
+    therefore exact, and a pixel an edge cuts through is left out.
+    """
+    lattice = np.zeros((height + 1, width + 1), dtype=np.uint8)
+    for polygon in polygons:
+        points = np.round(np.asarray(polygon, dtype=np.float64) / resolution * (1 << _SHIFT)).astype(np.int32)
+        cv2.fillPoly(lattice, [points.reshape(-1, 1, 2)], 1, shift=_SHIFT)
+    return (lattice[:-1, :-1] & lattice[1:, :-1] & lattice[:-1, 1:] & lattice[1:, 1:]).astype(np.uint8)
+
+
 def allowed_mask(zone: Zone, options: Options) -> np.ndarray:
     """Bool ``(h, w)``: True where a part's pixel may be.
 
@@ -42,12 +56,10 @@ def allowed_mask(zone: Zone, options: Options) -> np.ndarray:
     shrunk by half the spacing so that brims stay inside; the plate border counts as not allowed.
     """
     width, height = grid_size(zone, options.resolution)
+    plate = [(0.0, 0.0), (zone.width, 0.0), (zone.width, zone.depth), (0.0, zone.depth)]
+    mask = _whole_pixels_inside([plate], width, height, options.resolution)
     if zone.allowed:
-        mask = np.zeros((height, width), dtype=np.uint8)
-        for polygon in zone.allowed:
-            _fill(mask, polygon, options.resolution, touch=False)
-    else:
-        mask = np.ones((height, width), dtype=np.uint8)
+        mask &= _whole_pixels_inside(list(zone.allowed), width, height, options.resolution)
     if zone.excluded:
         excluded = np.zeros((height, width), dtype=np.uint8)
         for polygon in zone.excluded:

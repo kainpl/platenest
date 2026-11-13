@@ -122,7 +122,7 @@ def _fill(
             found = _place(plate, shapes, gravity)
             if found is None:
                 break
-            if len(placed) == limit:
+            if len(placed) >= limit:
                 limited = True
                 break
             plate.put(*found)
@@ -194,7 +194,7 @@ def pack(
         (index, copy)
         for index, part in enumerate(parts)
         if index not in rejected and not part.fill
-        for copy in range(part.quantity)
+        for copy in range(int(part.quantity))
     ]
 
     runs = [(order, gravity) for order in _ORDERS for gravity in GRAVITIES]
