@@ -29,7 +29,7 @@ packages = ["src/platenest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["tests"]
+pythonpath = ["tests", "tools"]
 markers = ["acceptance: local acceptance run against a real part set (needs PLATENEST_ACCEPTANCE_3MF)"]
 
 [tool.ruff]
