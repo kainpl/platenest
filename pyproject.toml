@@ -22,7 +22,7 @@ classifiers = [
 Homepage = "https://github.com/kainpl/platenest"
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "build", "twine"]
+dev = ["pytest", "ruff", "build", "twine", "shapely"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/platenest"]
