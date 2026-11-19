@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- **Optional longer search:** `optimize()` keeps a checked initial bitmap layout, tries rotation preferences
+  and the ready-made Sparrow solver, and returns the best valid result. Continuous Z rotations, original
+  contour/keep-out checks, full fixed demands, independent fill plates and cooperative finish/cancel are
+  supported. Install the `optimize` extra; the ordinary packer and stdlib 3MF module stay unchanged.
+
 ## [0.1.1] - 2026-11-13
 
 - **Fixed:** `from platenest import pack` returned a module instead of the function whenever `Cancelled` or

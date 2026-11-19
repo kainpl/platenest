@@ -83,6 +83,60 @@ Behaviour worth knowing:
 Speed, as a reference point: 90 copies of 15 real parts on three 325 x 320 mm plates take about 15 s on
 a desktop CPU.
 
+## Optional longer search
+
+`pip install "platenest[optimize]"` adds Shapely and the ready-made Sparrow
+optimizer through `spyrrow`. The ordinary `pack()` call and the stdlib-only
+3MF module keep their existing dependencies and deterministic behavior.
+
+```python
+from platenest import optimize
+
+operator_requested_best = False  # the caller may set this from its UI
+best = optimize(
+    parts,
+    zone,
+    Options(spacing=2),
+    seconds=300,
+    free_rotation=True,
+    progress=lambda event: print(len(event.best.placements)),
+    finish=lambda: operator_requested_best,
+)
+```
+
+The search starts with a checked bitmap layout, tries different rotation
+preferences, then keeps improvements from Sparrow. `free_rotation=True`
+permits any rotation around Z; otherwise `Options.rotations` remains binding.
+Models are never mirrored, resized or tilted. Work-zone exclusions and actual
+projected mesh contours are rechecked independently before accepting a layout.
+Frame holes remain available to the bitmap packer; Sparrow's Python wrapper
+conservatively treats an item's holes as solid. An unsupported or unsuccessful
+candidate never replaces the existing result.
+
+Fixed demands stay complete and aim for fewer plates. The strip result is
+conservatively divided into finite plates without cutting or dropping any part;
+every resulting plate is checked against the original work zone. Each fill part retains
+its own plate and cannot lose copies to improve another fill part. The group
+returned by the strip optimizer is rigidly rotated/repositioned to the work
+zone before checking it; a reported strip width alone is not a fit decision.
+
+`finish` cooperatively returns the best known result. `cancel` raises
+`Cancelled`, as it does for `pack`. Native solver attempts last up to 15 seconds
+by default (`attempt_seconds`), so stopping is checked between attempts and
+native cleanup can add a few seconds. `seconds` is a soft total budget, including
+geometry preparation; use an existing process supervisor for hard termination.
+The default 5-minute limit is a search budget, not an optimality proof. A seed
+is recorded by the caller; wall-clock-limited search does not promise identical
+results on different hardware. Preserve the returned placements to reproduce
+the chosen project.
+
+The optional module reuses Sparrow and Shapely instead of introducing a new
+nesting engine, geometry parser, scheduler or persistence layer. SVGnest and
+libnest2d were considered: SVGnest's JS/NFP integration was more expensive in
+the exploratory trials, while libnest2d's documented default geometry support
+does not fully cover holes/concavities. Neither is substituted for the existing
+bitmap path.
+
 ## The 3MF module
 
 `write_project` produces a multi-plate project the slicer opens and slices without re-arranging anything.
