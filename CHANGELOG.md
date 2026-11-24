@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-24
+
 - **Cancellation:** a one-shot operator cancellation in either raster recovery or bitmap restarts
   now propagates as `Cancelled`. Finish and budget expiry still return the best known result;
   their observed outcome is retained instead of polling the cancellation callback again.
