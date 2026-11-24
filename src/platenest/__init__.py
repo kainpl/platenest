@@ -12,11 +12,14 @@ from importlib import import_module
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from platenest.optimization import SearchProgress, optimize
     from platenest.packing import Cancelled, Progress, pack
     from platenest.preview import render_plate
     from platenest.types import Options, PackResult, Part, Placement, Polygon, Rejected, Zone, validate
 
 _HOME = {
+    "optimize": "optimization",
+    "SearchProgress": "optimization",
     # No submodule may share a name with something exported here: importing the submodule binds it on the
     # package under that name, and a later ``from platenest import <name>`` would return the module.
     "Cancelled": "packing",
@@ -34,6 +37,8 @@ _HOME = {
 }
 
 __all__ = [
+    "optimize",
+    "SearchProgress",
     "Cancelled",
     "Options",
     "PackResult",
